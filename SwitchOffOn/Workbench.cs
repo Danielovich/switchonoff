@@ -1,5 +1,4 @@
-﻿
-public class MarkdownPostParser
+﻿public class MarkdownPostParser
 {
     private const string validMarkdownComment1 = "[//]: #";
     private const string validMarkdownComment2 = "[//]:#";
@@ -24,7 +23,7 @@ public class MarkdownPostParser
         string? line;
 
         // Convention is that all comments from top of the MarkDown is a future
-        // post property. As soon as the parser sees something else it breaks.
+        // post property.
         while ((line = reader.ReadLine()) != null)
         {
             if (!(line.StartsWith(validMarkdownComment1) || line.StartsWith(validMarkdownComment2)))
@@ -36,35 +35,33 @@ public class MarkdownPostParser
             {
                 var markdownComment = new MarkdownComment(line);
 
-                // somewhat a tedious bit of code but it's easy to understand
-                // we start by looking at what type of comment we have on our hands
-                // from there we extract the comment value 
-                switch (markdownComment.GetValueBetweenFirstQuoteAndColon())
-                {
-                    case "title":
-                        MarkdownPost.Title = markdownComment.AsPostProperty("title").Value;
-                        break;
-                    case "slug":
-                        MarkdownPost.Slug = markdownComment.AsPostProperty("slug").Value;
-                        break;
-                    case "pubDate":
-                        MarkdownPost.PubDate = markdownComment.AsPostProperty("pubDate").ParseToDate();
-                        break;
-                    case "lastModified":
-                        MarkdownPost.LastModified = markdownComment.AsPostProperty("lastModified").ParseToDate();
-                        break;
-                    case "excerpt":
-                        MarkdownPost.Excerpt = markdownComment.AsPostProperty("excerpt").Value;
-                        break;
-                    case "categories":
-                        markdownComment.ToProperty("categories", ',').Select(n => n.Value).ToList().ForEach(MarkdownPost.Categories.Add);
-                        break;
-                    case "isPublished":
-                        MarkdownPost.IsPublished = markdownComment.AsPostProperty("isPublished").ParseToBool();
-                        break;
-                    default:
-                        break;
-                }
+                // I don't know about this construct, it blurs the image somewhat as to why 
+                // we want to check for null before we populate the property.
+                // but it is necessary since we are in a loop that will override the property
+                // if we do not check. And since our property is not nullable we cannot simply use
+                // ??=. I do not want to change the property signature just because it makes it easier
+                // in this case.
+                MarkdownPost.Title = MarkdownPost.Title.NullIfEmpty() ?? markdownComment.Title();
+                MarkdownPost.Slug = MarkdownPost.Slug.NullIfEmpty() ?? markdownComment.Slug();
+
+                // I am stopping this implementation here! Because I can see where this is going now.
+                // The default value of the PubDate is DateTime.UtcNow which would leave us with a poor 
+                // choice for checking a value that might have been set prior in the loop.
+                // And since I have no idea where the MarkdownPost is used elsewhere, I find 
+                // changing the signature a bad idea. Who knows what changing the property would cause elsewhere ?
+
+                // What ? This ? no way
+                // MarkdownPost.PubDate = if markdownComment.PubDate() is between a narrow interval
+                // it would have been nice to be able to do 
+                // MarkdownPost.PubDate ??= markdownComment.PubDate();
+
+                MarkdownPost.PubDate = markdownComment.PubDate();
+
+
+                MarkdownPost.LastModified = markdownComment.LastModified();
+                MarkdownPost.Excerpt = markdownComment.Excerpt();
+                MarkdownPost.Categories = markdownComment.Categories();
+                MarkdownPost.IsPublished = markdownComment.IsPublished();
             }
         }
 
@@ -119,6 +116,21 @@ public class MarkdownCommentsToBlogpostPropertiesTests
 
 #region code for primary objectives to work
 
+
+//I had to use these because the string properties in the MarkdownPost are not nullable,
+//which is by design. And I am not changing them just because an initial switch statement looked off.
+public static class StringExtensions
+{
+    public static string NullIfEmpty(this string s)
+    {
+        return string.IsNullOrEmpty(s) ? null : s;
+    }
+    public static string NullIfWhiteSpace(this string s)
+    {
+        return string.IsNullOrWhiteSpace(s) ? null : s;
+    }
+}
+
 public class MardownFile
 {
     public MardownFile() {}
@@ -131,8 +143,8 @@ public class MardownFile
     public string Contents { get; set; } = string.Empty;
 }
 
-// Represents a full markdown comment.
-// Such as [//]: # "categories: ugga, bugga, johnny"
+// I have come to like this approach simply because it encapsulates the 
+// ownership of the Properties that might available inside a MarkdownComment
 public class MarkdownComment
 {
     public MarkdownComment(string comment)
@@ -141,38 +153,60 @@ public class MarkdownComment
     }
 
     public string Comment { get; set; }
+
+    public string Title()
+    {
+        return this.AsPostProperty("title").Value;
+    }
+
+    public string Slug()
+    {
+        return this.AsPostProperty("slug").Value;
+    }
+
+    public DateTime PubDate()
+    {
+        return this.AsPostProperty("pubDate").ParseToDate();
+    }
+
+    internal DateTime LastModified()
+    {
+        return this.AsPostProperty("lastModified").ParseToDate();
+    }
+
+    internal string Excerpt()
+    {
+        return this.AsPostProperty("excerpt").Value;
+    }
+
+    internal IList<string> Categories()
+    {
+        return this.ToProperty("categories", ',').Select(n => n.Value).ToList();
+    }
+
+    internal bool IsPublished()
+    {
+        return this.AsPostProperty("isPublished").ParseToBool();
+    }
 }
 
 public class MarkdownPost
 {
-    public virtual IList<string> Categories { get; } = new List<string>();
+    // I changed this property which goes against my own statement about not changing the design
+    // of the type here. Simply because we do not know where it is being used.
+    public virtual IList<string> Categories { get; set; } = new List<string>();
     public virtual IList<string> Tags { get; } = new List<string>();
     public virtual string Content { get; set; } = string.Empty;
     public virtual string Excerpt { get; set; } = string.Empty;
     public virtual bool IsPublished { get; set; } = false;
     public virtual DateTime LastModified { get; set; } = DateTime.UtcNow;
-    public virtual DateTime PubDate { get; set; } = DateTime.UtcNow;
+    public virtual DateTime PubDate { get; set; } = DateTime.UtcNow; // yikes
     public virtual string Slug { get; set; } = string.Empty;
     public virtual string Title { get; set; } = string.Empty;
 }
 
 public static class MarkdownCommentExtensions
 {
-    public static string GetValueBetweenFirstQuoteAndColon(this MarkdownComment comment)
-    {
-        // Regex pattern to find the value between the first quote and the first colon
-        string pattern = "\"(.*?):";
-
-        Match match = Regex.Match(comment.Comment, pattern);
-        if (match.Success)
-        {
-            return match.Groups[1].Value.Trim();
-        }
-
-        return string.Empty;
-    }
-
-
     public static MarkdownProperty AsPostProperty(this MarkdownComment commentAsProperty, string commentProperty)
     {
         // it exercises on a comment like this [//]: # "title: hugga bugga ulla johnson"
