@@ -15,6 +15,22 @@ public class MarkdownPostParser
 
     public MarkdownPost MarkdownPost { get; private set; }
 
+    // A different approach. I would call it a little more clever in the sense that it compress the original switch
+    // statement and uses a data structure in a way that is not very common (Action as TValue!).
+    // But it's not pretty I think and it does compress the switch into something I find less readable.
+    // On the other hand I have not touched any other code other than the caller for this dictionary, and
+    // that's a good thing.
+    public Dictionary<string, Action<MarkdownComment>> markdownCommentParseActions =>
+        new Dictionary<string, Action<MarkdownComment>>
+        {
+            ["title"] = mc => MarkdownPost.Title = mc.AsPostProperty("title").Value,
+            ["slug"] = mc => MarkdownPost.Slug = mc.AsPostProperty("slug").Value,
+            ["pubDate"] = mc => MarkdownPost.PubDate = mc.AsPostProperty("pubDate").ParseToDate(),
+            ["lastModified"] = mc => MarkdownPost.LastModified = mc.AsPostProperty("lastModified").ParseToDate(),
+            ["excerpt"] = mc => MarkdownPost.Excerpt = mc.AsPostProperty("excerpt").Value,
+            ["categories"] = mc => mc.ToProperty("categories", ',').Select(n => n.Value).ToList().ForEach(MarkdownPost.Categories.Add),
+            ["isPublished"] = mc => MarkdownPost.IsPublished = mc.AsPostProperty("isPublished").ParseToBool()
+        };
 
     public async Task ParseCommentsAsPropertiesAsync()
     {
@@ -32,40 +48,16 @@ public class MarkdownPostParser
                 break;
             }
 
-            if (line.StartsWith(validMarkdownComment1) || line.StartsWith(validMarkdownComment2))
-            {
-                var markdownComment = new MarkdownComment(line);
+            var markdownComment = new MarkdownComment(line);
 
-                // somewhat a tedious bit of code but it's easy to understand
-                // we start by looking at what type of comment we have on our hands
-                // from there we extract the comment value 
-                switch (markdownComment.GetValueBetweenFirstQuoteAndColon())
-                {
-                    case "title":
-                        MarkdownPost.Title = markdownComment.AsPostProperty("title").Value;
-                        break;
-                    case "slug":
-                        MarkdownPost.Slug = markdownComment.AsPostProperty("slug").Value;
-                        break;
-                    case "pubDate":
-                        MarkdownPost.PubDate = markdownComment.AsPostProperty("pubDate").ParseToDate();
-                        break;
-                    case "lastModified":
-                        MarkdownPost.LastModified = markdownComment.AsPostProperty("lastModified").ParseToDate();
-                        break;
-                    case "excerpt":
-                        MarkdownPost.Excerpt = markdownComment.AsPostProperty("excerpt").Value;
-                        break;
-                    case "categories":
-                        markdownComment.ToProperty("categories", ',').Select(n => n.Value).ToList().ForEach(MarkdownPost.Categories.Add);
-                        break;
-                    case "isPublished":
-                        MarkdownPost.IsPublished = markdownComment.AsPostProperty("isPublished").ParseToBool();
-                        break;
-                    default:
-                        break;
-                }
+            string commentValue = markdownComment.GetValueBetweenFirstQuoteAndColon();
+
+            // Check if the property key exists in the dictionary and execute the corresponding action
+            if (markdownCommentParseActions.TryGetValue(commentValue, out var action))
+            {
+                action(markdownComment);
             }
+
         }
 
         await Task.CompletedTask;
@@ -104,11 +96,11 @@ public class MarkdownCommentsToBlogpostPropertiesTests
         var markDownBlogpostParser = new MarkdownPostParser(new MardownFile(comments));
         await markDownBlogpostParser.ParseCommentsAsPropertiesAsync();
 
-        Assert.True(markDownBlogpostParser.MarkdownPost.Title != string.Empty);
-        Assert.True(markDownBlogpostParser.MarkdownPost.Slug != string.Empty);
-        Assert.True(markDownBlogpostParser.MarkdownPost.PubDate > DateTime.MinValue);
-        Assert.True(markDownBlogpostParser.MarkdownPost.LastModified > DateTime.MinValue);
-        Assert.True(markDownBlogpostParser.MarkdownPost.Excerpt != string.Empty);
+        Assert.True(markDownBlogpostParser.MarkdownPost.Title == "hugga bugga ulla johnson");
+        Assert.True(markDownBlogpostParser.MarkdownPost.Slug == "hulla bulla");
+        Assert.True(markDownBlogpostParser.MarkdownPost.PubDate == new DateTime(2017, 10, 13, 18, 59, 00));
+        Assert.True(markDownBlogpostParser.MarkdownPost.LastModified == new DateTime(2017, 10, 13, 23, 59, 00));
+        Assert.True(markDownBlogpostParser.MarkdownPost.Excerpt == "an excerpt you would never imagine ");
         Assert.True(markDownBlogpostParser.MarkdownPost.Categories.Count() == 4);
         Assert.True(markDownBlogpostParser.MarkdownPost.IsPublished);
     }
