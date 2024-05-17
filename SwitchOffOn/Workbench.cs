@@ -1,9 +1,12 @@
-﻿
+﻿using System.Reflection;
+
 public class MarkdownPostParser
 {
     private const string validMarkdownComment1 = "[//]: #";
     private const string validMarkdownComment2 = "[//]:#";
     public string Markdown { get; set; } = string.Empty;
+
+    private PropertyParserFactory propertyParserFactory;
 
     public MarkdownPostParser(MardownFile markdownFile)
     {
@@ -11,6 +14,7 @@ public class MarkdownPostParser
 
         Markdown = markdownFile.Contents;
         MarkdownPost = new MarkdownPost();
+        propertyParserFactory = new PropertyParserFactory();
     }
 
     public MarkdownPost MarkdownPost { get; private set; }
@@ -32,43 +36,141 @@ public class MarkdownPostParser
                 break;
             }
 
-            if (line.StartsWith(validMarkdownComment1) || line.StartsWith(validMarkdownComment2))
-            {
-                var markdownComment = new MarkdownComment(line);
+            var markdownComment = new MarkdownComment(line);
+            
+            // find a parser by looking at what the comment is (title, slug, pubDate etc.)
+            var parser = propertyParserFactory.Find(markdownComment);
 
-                // somewhat a tedious bit of code but it's easy to understand
-                // we start by looking at what type of comment we have on our hands
-                // from there we extract the comment value 
-                switch (markdownComment.GetValueBetweenFirstQuoteAndColon())
-                {
-                    case "title":
-                        MarkdownPost.Title = markdownComment.AsPostProperty("title").Value;
-                        break;
-                    case "slug":
-                        MarkdownPost.Slug = markdownComment.AsPostProperty("slug").Value;
-                        break;
-                    case "pubDate":
-                        MarkdownPost.PubDate = markdownComment.AsPostProperty("pubDate").ParseToDate();
-                        break;
-                    case "lastModified":
-                        MarkdownPost.LastModified = markdownComment.AsPostProperty("lastModified").ParseToDate();
-                        break;
-                    case "excerpt":
-                        MarkdownPost.Excerpt = markdownComment.AsPostProperty("excerpt").Value;
-                        break;
-                    case "categories":
-                        markdownComment.ToProperty("categories", ',').Select(n => n.Value).ToList().ForEach(MarkdownPost.Categories.Add);
-                        break;
-                    case "isPublished":
-                        MarkdownPost.IsPublished = markdownComment.AsPostProperty("isPublished").ParseToBool();
-                        break;
-                    default:
-                        break;
-                }
-            }
+            // found no parser, convention is that it will break when no more comments are present
+            if (parser == null) break;
+
+            parser.Parse(this.MarkdownPost);
+
+            // Not all parsers are implemented in this branch!
+
+            //// somewhat a tedious bit of code but it's easy to understand
+            //// we start by looking at what type of comment we have on our hands
+            //// from there we extract the comment value 
+            //switch (markdownComment.GetValueBetweenFirstQuoteAndColon())
+            //{
+            //    case "title":
+            //        MarkdownPost.Title = markdownComment.AsPostProperty("title").Value;
+            //        break;
+            //    case "slug":
+            //        MarkdownPost.Slug = markdownComment.AsPostProperty("slug").Value;
+            //        break;
+            //    case "pubDate":
+            //        MarkdownPost.PubDate = markdownComment.AsPostProperty("pubDate").ParseToDate();
+            //        break;
+            //    case "lastModified":
+            //        MarkdownPost.LastModified = markdownComment.AsPostProperty("lastModified").ParseToDate();
+            //        break;
+            //    case "excerpt":
+            //        MarkdownPost.Excerpt = markdownComment.AsPostProperty("excerpt").Value;
+            //        break;
+            //    case "categories":
+            //        markdownComment.ToProperty("categories", ',').Select(n => n.Value).ToList().ForEach(MarkdownPost.Categories.Add);
+            //        break;
+            //    case "isPublished":
+            //        MarkdownPost.IsPublished = markdownComment.AsPostProperty("isPublished").ParseToBool();
+            //        break;
+            //    default:
+            //        break;
+            //}
+
         }
 
         await Task.CompletedTask;
+    }
+}
+
+public class PropertyParserFactory
+{
+    private readonly Dictionary<string, IPropertyParser> propertyaParserMap;
+    public PropertyParserFactory()
+    {
+        propertyaParserMap = new Dictionary<string, IPropertyParser>();
+
+        // find all parsers that implement IPropertyParser
+        var propertyTypes = Assembly.GetExecutingAssembly().GetTypes()
+            .Where(t => typeof(IPropertyParser).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract);
+
+        // Instantiate each IPropertyParser and add it do the map
+        foreach (var type in propertyTypes)
+        {
+            var propertyInstance = Activator.CreateInstance(type) as IPropertyParser;
+            if (propertyInstance == null)
+            {
+                throw new InvalidOperationException($"could not create an instance of {type}");
+            }
+
+            propertyaParserMap[propertyInstance.PropertyName] = propertyInstance;
+        }
+    }
+
+    public IPropertyParser? Find(MarkdownComment comment)
+    {
+        IPropertyParser? parser;
+
+        if (propertyaParserMap.TryGetValue(comment.GetValueBetweenFirstQuoteAndColon(), out parser))
+        {
+            //somewhat hidden, could be setable from the callee instead. 
+            parser.PropertyCandidate = comment;
+        }
+
+        return parser;
+    }
+}
+
+public interface IPropertyParser
+{
+    /// <summary>
+    /// The name of the MarkdownComment property 
+    /// </summary>
+    string PropertyName { get; }
+
+    /// <summary>
+    /// The comment in MarkDown, e.g "[//]: #title: hugga bugga ulla johnson"
+    /// </summary>
+    MarkdownComment PropertyCandidate { get; set; }
+
+    /// <summary>
+    /// Parses a comment to a property
+    /// </summary>
+    /// <param name="markDownPostToPopulate">This is being partially populated by the parser at hand</param>
+    void Parse(MarkdownPost markDownPostToPopulate);
+
+    // ^ Instead of having a Parse that takes a MarkdownPost another option would
+    // be to add a MarkdownPost to the PropertyBase and set it from the callee. 
+    // Not sure I like the parameter of Parse.
+
+    // In fact I do not like the name Parse since it actually does no parsing.
+    // So in a refactoring of this I would rename a few things; propertyparser, parse etc.
+}
+
+public class PropertyBase
+{
+    public MarkdownComment PropertyCandidate { get; set; } = new MarkdownComment(string.Empty);
+}
+
+public class SlugProperty : PropertyBase, IPropertyParser
+{
+    public string PropertyName { get { return "slug"; } }
+    
+    public void Parse(MarkdownPost markDownPostToPopulate)
+    {
+        markDownPostToPopulate.Slug = PropertyCandidate.AsPostProperty(PropertyName).Value;
+    }
+}
+
+
+public class TitleProperty : PropertyBase, IPropertyParser
+{
+    public string PropertyName { get { return "title"; } }
+
+    public void Parse(MarkdownPost markDownPostToPopulate)
+    {
+        markDownPostToPopulate.Title = PropertyCandidate.AsPostProperty(PropertyName).Value;
     }
 }
 
@@ -121,7 +223,7 @@ public class MarkdownCommentsToBlogpostPropertiesTests
 
 public class MardownFile
 {
-    public MardownFile() {}
+    public MardownFile() { }
 
     public MardownFile(string contents)
     {
